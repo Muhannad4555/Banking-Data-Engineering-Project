@@ -9,19 +9,31 @@ An end-to-end data engineering project. Every change in a PostgreSQL banking dat
 ## Architecture
 
 ```mermaid
-flowchart LR
-    gen["generator.py<br/>synthetic activity"] --> pg[("PostgreSQL")]
-    pg -->|WAL| dbz["Debezium<br/>(Kafka Connect)"]
-    dbz --> kafka[["Kafka topics"]]
-    kafka --> cons["consumer.py"]
-    cons --> s3[("S3<br/>raw/*.jsonl")]
-    s3 -->|COPY INTO| raw[("Snowflake<br/>RAW")]
-    raw -->|dbt| cleaned[("CLEANED")]
-    cleaned -->|dbt| gold[("BUSINESS_READY")]
-    gold --> bi["Power BI<br/>dashboard"]
-    airflow{{"Airflow<br/>every 10 min"}} -.-> raw
-    airflow -.-> cleaned
-    airflow -.-> gold
+flowchart TB
+    subgraph source["1 · Source"]
+        direction LR
+        gen["generator.py<br/>synthetic activity"] --> pg[("PostgreSQL")]
+    end
+    subgraph stream["2 · CDC and streaming"]
+        direction LR
+        dbz["Debezium<br/>(Kafka Connect)"] --> kafka[["Kafka topics"]]
+    end
+    subgraph lake["3 · Data lake"]
+        direction LR
+        cons["consumer.py"] --> s3[("S3<br/>raw/*.jsonl")]
+    end
+    subgraph wh["4 · Snowflake, modelled with dbt"]
+        direction LR
+        raw[("RAW")] -->|dbt| cleaned[("CLEANED")] -->|dbt| gold[("BUSINESS_READY")]
+    end
+    pbi["5 · Visualisation<br/>Power BI dashboard"]
+    airflow{{"Airflow<br/>every 10 min"}}
+
+    source -->|WAL| stream
+    stream -->|events| lake
+    lake -->|COPY INTO| wh
+    wh -->|Import| pbi
+    airflow -.->|"load_raw, dbt run, dbt test"| wh
 ```
 
 | Stage | Tool | Role |
