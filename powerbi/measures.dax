@@ -1,0 +1,15 @@
+// Power BI measures, one per "New measure". Snowflake returns UPPERCASE table and column names.
+// Totals over the CUSTOMER_SUMMARY table
+Customers = COUNTROWS ( CUSTOMER_SUMMARY )
+Total Balance = SUM ( CUSTOMER_SUMMARY[TOTAL_BALANCE] )
+Total Deposits = SUM ( CUSTOMER_SUMMARY[TOTAL_DEPOSITS] )
+Total Withdrawals = SUM ( CUSTOMER_SUMMARY[TOTAL_WITHDRAWALS] )
+Net Flow = [Total Deposits] - [Total Withdrawals]
+
+// Totals over the DAILY_TRANSACTIONS table
+Total Transactions = SUM ( DAILY_TRANSACTIONS[TRANSACTIONS] )
+Total Amount = SUM ( DAILY_TRANSACTIONS[TOTAL_AMOUNT] )
+
+// Calculated column on CUSTOMER_SUMMARY (use "New column", not "New measure"): one unique label per customer.
+// Use it instead of NAME on chart axes and tables, because NAME repeats when generator.py ran more than once.
+Customer Label = CUSTOMER_SUMMARY[NAME] & " #" & CUSTOMER_SUMMARY[CUSTOMER_ID]

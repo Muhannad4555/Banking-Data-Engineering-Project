@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/Muhannad4555/Banking-Data-Engineering-Project/actions/workflows/ci.yml/badge.svg)](https://github.com/Muhannad4555/Banking-Data-Engineering-Project/actions/workflows/ci.yml)
 
-An end-to-end data engineering project. Every change in a PostgreSQL banking database is captured with **Change Data Capture (CDC)**, streamed through **Kafka**, stored in **S3**, loaded into **Snowflake**, modelled with **dbt** in medallion layers (raw, cleaned, business ready) and orchestrated with **Airflow**. The whole stack runs locally with **Docker Compose**, and **GitHub Actions** checks every push.
+An end-to-end data engineering project. Every change in a PostgreSQL banking database is captured with **Change Data Capture (CDC)**, streamed through **Kafka**, stored in **S3**, loaded into **Snowflake**, modelled with **dbt** in medallion layers (raw, cleaned, business ready), orchestrated with **Airflow** and visualised in **Power BI**. The whole stack runs locally with **Docker Compose**, and **GitHub Actions** checks every push.
 
 > All data is synthetic and produced by `generator.py`. No real banking data is used.
 
@@ -18,6 +18,7 @@ flowchart LR
     s3 -->|COPY INTO| raw[("Snowflake<br/>RAW")]
     raw -->|dbt| cleaned[("CLEANED")]
     cleaned -->|dbt| gold[("BUSINESS_READY")]
+    gold --> bi["Power BI<br/>dashboard"]
     airflow{{"Airflow<br/>every 10 min"}} -.-> raw
     airflow -.-> cleaned
     airflow -.-> gold
@@ -33,6 +34,7 @@ flowchart LR
 | Warehouse | Snowflake | `RAW`, `CLEANED` and `BUSINESS_READY` schemas (bronze, silver, gold) |
 | Transformation | dbt | Parses events, keeps the latest version of each row, builds marts, tests data quality |
 | Orchestration | Airflow | DAG `banking_pipeline`: `load_raw >> dbt_run >> dbt_test` |
+| Visualisation | Power BI Desktop | Import-mode report on the `BUSINESS_READY` tables, read through the read-only `BI_READER` role |
 | CI | GitHub Actions | Validates the Python files, the Compose file, the dbt project and the Airflow image |
 
 ## How the data flows
@@ -67,6 +69,20 @@ A change event looks like this (abbreviated):
 
 The cleaned models are covered by 10 tests: `unique` and `not_null` on keys, `relationships` between tables and `accepted_values` for `transactions.type`.
 
+## Orchestration (Airflow)
+
+![Airflow DAG graph](docs/airflow-dag.png)
+
+The DAG `banking_pipeline` loads the new S3 files into `RAW`, builds the dbt models and then runs the dbt tests, every 10 minutes. If a task fails, the tasks after it do not run.
+
+## Dashboard (Power BI)
+
+![Power BI dashboard](docs/dashboard.png)
+
+The report reads the two `BUSINESS_READY` tables in Import mode through the read-only `BI_READER` role (`snowflake/04_bi_role.sql`). It shows total balance, deposits, withdrawals and net flow, the balance per customer, the transactions per day split by deposit and withdrawal, and a per-customer table. The measures are in [`powerbi/measures.dax`](powerbi/measures.dax).
+
+Customer names repeat across runs of `generator.py` (`Customer 0` to `Customer 4`), so the report labels each customer with name and id (the `Customer Label` column).
+
 ## Repository layout
 
 ```
@@ -78,6 +94,7 @@ The cleaned models are covered by 10 tests: `unique` and `not_null` on keys, `re
 │   └── scripts/load_raw.py         COPY INTO the RAW tables
 ├── banking_dbt/                    dbt project (cleaned and business_ready models)
 ├── docs/                           Images used in this README
+├── powerbi/                        DAX measures used by the Power BI report
 ├── snowflake/                      Setup SQL: storage integration, stage, tables, roles
 ├── sql/init.sql                    PostgreSQL schema
 ├── connector.json                  Debezium connector configuration
@@ -92,7 +109,7 @@ The cleaned models are covered by 10 tests: `unique` and `not_null` on keys, `re
 
 Developed and tested on Windows 11 with Docker Desktop. Other platforms are untested.
 
-**Prerequisites:** Docker Desktop, Python 3.12, an AWS account (S3 and IAM) and a Snowflake account (a trial is enough).
+**Prerequisites:** Docker Desktop, Python 3.12, an AWS account (S3 and IAM), a Snowflake account (a trial is enough) and, for the dashboard, Power BI Desktop (Windows only).
 
 ### 1. Install
 
@@ -147,8 +164,9 @@ Run the SQL files in a Snowsight worksheet:
 1. `snowflake/01_setup.sql`, section by section. Replace `<BUCKET>` and `<ROLE_ARN>` first, and update the AWS role trust policy with the values returned by `DESC INTEGRATION s3_int` before running section 2.
 2. `snowflake/02_dbt_role.sql` creates the `TRANSFORMER` role for dbt.
 3. `snowflake/03_loader_role.sql` creates the `LOADER` role for Airflow.
+4. `snowflake/04_bi_role.sql` creates the read-only `BI_READER` role for Power BI.
 
-In files 2 and 3 replace `<YOUR_USER>` with your Snowflake user and keep the double quotes (required when the name starts with a digit).
+In files 2, 3 and 4 replace `<YOUR_USER>` with your Snowflake user and keep the double quotes (required when the name starts with a digit).
 
 <details>
 <summary>AWS setup (IAM)</summary>
@@ -230,16 +248,21 @@ docker compose exec airflow cat /opt/airflow/standalone_admin_password.txt
 
 The DAG `banking_pipeline` starts paused. Unpause it or trigger it manually. It runs every 10 minutes, so it wakes the Snowflake warehouse each time; pause it when you are not using it.
 
+### 8. Build the dashboard
+
+In Power BI Desktop choose `Get data`, then `Snowflake`, with the server `<account_identifier>.snowflakecomputing.com`, the warehouse `COMPUTE_WH`, `Import` mode and, under `Advanced options`, the role `BI_READER`. Sign in on the `Database` tab with your Snowflake user and password, load `CUSTOMER_SUMMARY` and `DAILY_TRANSACTIONS` from `BANKING` / `BUSINESS_READY`, then create the measures from `powerbi/measures.dax`. After Airflow has rebuilt the tables, click `Refresh` in Power BI.
+
 ## Design decisions
 
 - **A small Python consumer instead of the S3 sink connector.** About 45 lines, easy to read and debug. Offsets are committed after the upload, and the resulting duplicates are removed in dbt.
 - **Raw events are stored untouched.** `RAW` is an append-only log in a `VARIANT` column, so parsing logic can be fixed in dbt and replayed without re-ingesting.
 - **Latest event per key.** `qualify row_number() over (partition by id order by lsn desc) = 1`, then rows with `op = 'd'` are dropped after picking the latest event. Filtering deletes first would bring back the previous version of a deleted row.
 - **No AWS keys in Snowflake.** A storage integration lets Snowflake assume an IAM role, protected by an external ID.
-- **Least privilege.** The ingestion user can only write to `raw/`. The Snowflake roles `LOADER` (load into `RAW`) and `TRANSFORMER` (read `RAW`, write `CLEANED` and `BUSINESS_READY`) are separate.
+- **Least privilege.** The ingestion user can only write to `raw/`. The Snowflake roles `LOADER` (load into `RAW`), `TRANSFORMER` (read `RAW`, write `CLEANED` and `BUSINESS_READY`) and `BI_READER` (read `BUSINESS_READY`) are separate.
 - **dbt in its own virtualenv inside the Airflow image,** because its dependencies conflict with the versions Airflow pins.
 - **Amounts as strings in the events** (`decimal.handling.mode=string`), cast to `NUMBER(12,2)` in dbt.
 - **No fan-out in `customer_summary`.** Balances and transactions are aggregated in separate CTEs before joining, so balances are not counted once per transaction.
+- **The dashboard reads only the gold layer.** Power BI never touches `RAW` or `CLEANED`, and the dashboard totals were reconciled against Snowflake queries.
 
 ## Limitations and next steps
 
@@ -249,7 +272,8 @@ The DAG `banking_pipeline` starts paused. Unpause it or trigger it manually. It 
 - Airflow runs in `standalone` mode with SQLite, which suits learning but not production.
 - Kafka is a single node with replication factor 1.
 - CI validates the project structure (`dbt parse`) but does not run the models against Snowflake.
-- Planned: a Power BI dashboard on the `BUSINESS_READY` tables, and event-driven loading with Snowpipe.
+- The Power BI report is built by hand in Power BI Desktop (Import mode, manual refresh). Scheduled refresh would need the Power BI service.
+- Planned: event-driven loading with Snowpipe.
 
 ## Security notes
 
