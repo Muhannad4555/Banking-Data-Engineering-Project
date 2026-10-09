@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    env:
+      # dbt parse never connects to Snowflake; the variables only have to exist so profiles.yml renders
+      SNOWFLAKE_ACCOUNT: ci
+      SNOWFLAKE_USER: ci
+      SNOWFLAKE_PASSWORD: ci
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - run: pip install dbt-snowflake==1.12.1
+      - name: Python files compile
+        run: python -m compileall -q generator.py consumer.py airflow
+      - name: Compose file is valid
+        run: docker compose config -q
+      - name: dbt project parses (models, refs, tests)
+        run: dbt parse
+        working-directory: banking_dbt
+
+  airflow-image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Airflow image builds
+        run: docker build ./airflow

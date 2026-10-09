@@ -1,0 +1,12 @@
+name: banking
+version: "1.0"
+profile: banking
+
+models:
+  banking:
+    cleaned:
+      +schema: cleaned
+      +materialized: table
+    business_ready:
+      +schema: business_ready
+      +materialized: table
