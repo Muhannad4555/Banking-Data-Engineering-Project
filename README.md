@@ -8,33 +8,9 @@ An end-to-end data engineering project. Every change in a PostgreSQL banking dat
 
 ## Architecture
 
-```mermaid
-flowchart TB
-    subgraph source["1 · Source"]
-        direction LR
-        gen["generator.py<br/>synthetic activity"] --> pg[("PostgreSQL")]
-    end
-    subgraph stream["2 · CDC and streaming"]
-        direction LR
-        dbz["Debezium<br/>(Kafka Connect)"] --> kafka[["Kafka topics"]]
-    end
-    subgraph lake["3 · Data lake"]
-        direction LR
-        cons["consumer.py"] --> s3[("S3<br/>raw/*.jsonl")]
-    end
-    subgraph wh["4 · Snowflake, modelled with dbt"]
-        direction LR
-        raw[("RAW")] -->|dbt| cleaned[("CLEANED")] -->|dbt| gold[("BUSINESS_READY")]
-    end
-    pbi["5 · Visualisation<br/>Power BI dashboard"]
-    airflow{{"Airflow<br/>every 10 min"}}
+![Architecture diagram](docs/architecture.png)
 
-    source -->|WAL| stream
-    stream -->|events| lake
-    lake -->|COPY INTO| wh
-    wh -->|Import| pbi
-    airflow -.->|"load_raw, dbt run, dbt test"| wh
-```
+The diagram is a PNG so it also shows in the GitHub mobile app. Its Mermaid source is in [`docs/architecture.mmd`](docs/architecture.mmd).
 
 | Stage | Tool | Role |
 |---|---|---|
